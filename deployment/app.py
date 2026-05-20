@@ -74,8 +74,10 @@ class RootStack(Stack):
             cognito_app_client_id = srv_pre_stack.cognito_app_client_id,
             cognito_identity_pool_id = srv_pre_stack.cognito_identity_pool_id,
             s3_bucket_name_data = srv_pre_stack.s3_data_bucket_name,
+            api_gw_base_url_product_srv = product_service_stack.api_gw_base_url,
         )
         frontend_stack.node.add_dependency(nova_service_stack)
+        frontend_stack.node.add_dependency(product_service_stack)
 
         # Service post stack
         service_post_stack = ServicePostStack(self, 

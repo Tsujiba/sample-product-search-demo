@@ -37,6 +37,7 @@ class FrontendStack(NestedStack):
             cognito_app_client_id, 
             cognito_identity_pool_id,
             s3_bucket_name_data,
+            api_gw_base_url_product_srv="",
             **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         
@@ -44,6 +45,7 @@ class FrontendStack(NestedStack):
         self.region=os.environ.get("CDK_DEFAULT_REGION")
         
         self.api_gw_base_url_nova_srv = api_gw_base_url_nova_srv
+        self.api_gw_base_url_product_srv = api_gw_base_url_product_srv
         self.cognito_user_pool_id = cognito_user_pool_id
         self.cognito_app_client_id = cognito_app_client_id
         self.cognito_identity_pool_id = cognito_identity_pool_id
@@ -114,6 +116,7 @@ class FrontendStack(NestedStack):
                     "REACT_APP_READONLY_DISPLAY_MENUS": codebuild.BuildEnvironmentVariable(value=FRONT_END_DISPLAY_MENUS),
                     "REACT_APP_COGNITO_IDENTITY_POOL_ID": codebuild.BuildEnvironmentVariable(value=self.cognito_identity_pool_id),
                     "REACT_APP_COGNITO_REGION": codebuild.BuildEnvironmentVariable(value=self.region),
+                    "REACT_APP_APIGATEWAY_BASE_URL_PRODUCT_SRV": codebuild.BuildEnvironmentVariable(value=self.api_gw_base_url_product_srv),
                 }
             ),
             artifacts=codebuild.Artifacts.s3(
