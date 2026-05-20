@@ -4,12 +4,14 @@ import "@aws-amplify/ui-react/styles.css";
 import { Icon, Link } from "@cloudscape-design/components";
 import AgentMain from "./components/agent/agentMain";
 import NovaMmeVideoMain from "./components/novaMme/videoMain";
+import ProductSearchMain from "./components/productSearch/ProductSearchMain";
 import "./App.css";
 import About from "./about"
 import { FetchPost } from "./resources/data-provider";
 
 const ITEMS = [
   { type: "link", icon: "search", text: "Search", id: "novamme", href: "#/novamme" },
+  { type: "link", icon: "shopping-bag", text: "Products", id: "products", href: "#/products" },
   { type: "link", icon: "gen-ai", text: "Chat", id: "chat", href: "#/chat" },
   { type: "split" },
   { type: "link", icon: "support", text: "About", id: "about", href: "#/about" },
@@ -111,6 +113,8 @@ class App extends Component {
               cleanSelectionSignal={cleanSelectionSignal}
               readOnlyUsers={this.getReadOnlyUsers()}
             />
+          ) : currentPage === "products" ? (
+            <ProductSearchMain />
           ) : currentPage === "about" ? <About/>: <div/>
 
         }

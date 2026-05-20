@@ -45,6 +45,10 @@ Amplify.configure({
       NovaService: {
         endpoint: `${process.env.REACT_APP_APIGATEWAY_BASE_URL_NOVA_SRV}v1`,
         region: process.env.REACT_APP_COGNITO_REGION
+      },
+      ProductService: {
+        endpoint: `${process.env.REACT_APP_APIGATEWAY_BASE_URL_PRODUCT_SRV}v1`,
+        region: process.env.REACT_APP_COGNITO_REGION
       }
     },
   }

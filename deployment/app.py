@@ -7,6 +7,7 @@ from aws_cdk import Duration
 import os, json
 #from nova_service.nova_service_pre_stack import NovaServicePreStack
 from nova_service.nova_service_stack import NovaServiceStack
+from product_service.product_service_stack import ProductServiceStack
 from pre_stack.service_pre_stack import ServicePreStack
 from post_stack.service_post_stack import ServicePostStack
 from frontend.frontend_stack import FrontendStack
@@ -53,6 +54,17 @@ class RootStack(Stack):
         )
         nova_service_stack.node.add_dependency(srv_pre_stack)
 
+        # Product service stack (商品画像検索)
+        product_service_stack = ProductServiceStack(self,
+            "ProductServiceStack",
+            description="Deploy product search services: DynamoDB, S3 Vectors, API Gateway, Lambda.",
+            timeout=Duration.hours(1),
+            cognito_user_pool_id=srv_pre_stack.cognito_user_pool_id,
+            cognito_app_client_id=srv_pre_stack.cognito_app_client_id,
+            s3_data_bucket_name=srv_pre_stack.s3_data_bucket_name,
+        )
+        product_service_stack.node.add_dependency(srv_pre_stack)
+
         # Frontend stack
         frontend_stack = FrontendStack(self, 
             "NovaMmeFrontStack", 
@@ -81,6 +93,8 @@ class RootStack(Stack):
         CfnOutput(self, "Website URL", value=f"https://{frontend_stack.output_url}")
 
         CfnOutput(self, "API Gateway Base URL: Nova MME Service", value=nova_service_stack.api_gw_base_url)
+
+        CfnOutput(self, "API Gateway Base URL: Product Service", value=product_service_stack.api_gw_base_url)
 
         
         CfnOutput(self, "Cognito User Pool Id", value=srv_pre_stack.cognito_user_pool_id)
