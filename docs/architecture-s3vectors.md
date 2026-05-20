@@ -2,6 +2,54 @@
 
 ## アーキテクチャ概要
 
+```mermaid
+flowchart TB
+    subgraph Client
+        FE[React Frontend<br/>CloudFront + S3]
+    end
+
+    subgraph API["API Gateway + Cognito Auth"]
+        REG_API[POST /products/register]
+        SEARCH_API[POST /products/search]
+        LIST_API[POST /products/list]
+    end
+
+    subgraph Lambda
+        REG[product-register<br/>Lambda]
+        SEARCH[product-search<br/>Lambda]
+        LIST[product-list<br/>Lambda]
+    end
+
+    subgraph Embedding
+        NOVA[Amazon Nova<br/>Multimodal Embeddings V1<br/>1024次元]
+    end
+
+    subgraph Storage
+        DDB[(DynamoDB<br/>nova_mme_product_master)]
+        S3V_IMG[(S3 Vectors<br/>product-image-vectors)]
+        S3V_TXT[(S3 Vectors<br/>product-text-vectors)]
+        S3[S3<br/>商品画像]
+    end
+
+    FE --> REG_API & SEARCH_API & LIST_API
+    REG_API --> REG
+    SEARCH_API --> SEARCH
+    LIST_API --> LIST
+
+    REG -->|テキスト/画像| NOVA
+    REG -->|商品情報| DDB
+    REG -->|画像Embedding| S3V_IMG
+    REG -->|テキストEmbedding| S3V_TXT
+    REG -->|画像ファイル| S3
+
+    SEARCH -->|クエリ| NOVA
+    SEARCH -->|knn検索| S3V_IMG & S3V_TXT
+    SEARCH -->|商品詳細取得| DDB
+    SEARCH -->|presigned URL| S3
+
+    LIST --> DDB
+```
+
 ```
 [クエリ] → Nova Embeddings → S3 Vectors (knn) → DynamoDB (商品詳細) → レスポンス
 ```

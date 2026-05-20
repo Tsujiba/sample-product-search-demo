@@ -2,6 +2,52 @@
 
 ## アーキテクチャ概要
 
+```mermaid
+flowchart TB
+    subgraph Client
+        FE[React Frontend<br/>CloudFront + S3]
+    end
+
+    subgraph API["API Gateway + Cognito Auth"]
+        REG_API[POST /products/register]
+        SEARCH_API[POST /products/search]
+    end
+
+    subgraph Lambda
+        REG[product-register<br/>Lambda]
+        SEARCH[product-search<br/>Lambda]
+    end
+
+    subgraph Embedding
+        NOVA[Amazon Nova<br/>Multimodal Embeddings V1<br/>1024次元]
+    end
+
+    subgraph OpenSearch["OpenSearch Serverless (VECTORSEARCH)"]
+        AOSS[(product-vectors index<br/>knn_vector + kuromoji)]
+        PIPE[hybrid-search-pipeline<br/>knn 60% + BM25 40%]
+    end
+
+    subgraph Storage
+        DDB[(DynamoDB<br/>nova_mme_product_master)]
+        S3[S3<br/>商品画像]
+    end
+
+    FE --> REG_API & SEARCH_API
+    REG_API --> REG
+    SEARCH_API --> SEARCH
+
+    REG -->|テキスト/画像| NOVA
+    REG -->|商品情報| DDB
+    REG -->|Embedding + テキスト| AOSS
+    REG -->|画像ファイル| S3
+
+    SEARCH -->|クエリ| NOVA
+    SEARCH -->|hybrid query| AOSS
+    AOSS --> PIPE
+    SEARCH -->|商品詳細取得| DDB
+    SEARCH -->|presigned URL| S3
+```
+
 ```
 [クエリ] → Nova Embeddings → OpenSearch Serverless (knn + BM25 hybrid) → DynamoDB (商品詳細) → レスポンス
 ```
@@ -20,9 +66,9 @@
 | `embedding` | knn_vector (1024) | - | Nova Embeddingsベクトル |
 | `product_id` | keyword | - | 商品ID（DynamoDB PK） |
 | `product_code` | keyword | - | 商品コード |
-| `product_name` | text | ja_analyzer (icu_tokenizer) | 商品名（全文検索対象） |
+| `product_name` | text | ja_analyzer (kuromoji) | 商品名（全文検索対象） |
 | `category` | keyword | - | カテゴリ（フィルタ用） |
-| `text_content` | text | ja_analyzer (icu_tokenizer) | 商品説明全文（全文検索対象） |
+| `text_content` | text | ja_analyzer (kuromoji) | 商品説明全文（全文検索対象） |
 | `embedding_type` | keyword | - | "image" or "text" |
 
 **knn設定:**
@@ -44,12 +90,16 @@
   "analyzer": {
     "ja_analyzer": {
       "type": "custom",
-      "tokenizer": "icu_tokenizer",
-      "filter": ["icu_folding", "lowercase"]
+      "tokenizer": "kuromoji_tokenizer",
+      "filter": ["kuromoji_baseform", "kuromoji_part_of_speech", "lowercase"]
     }
   }
 }
 ```
+
+- `kuromoji_tokenizer`: 辞書ベースの形態素解析で日本語を正確にトークン分割
+- `kuromoji_baseform`: 活用形を基本形に変換（「走った」→「走る」）
+- `kuromoji_part_of_speech`: 助詞・助動詞等のストップワード相当を除去
 
 ### ドキュメント構造
 
@@ -161,39 +211,9 @@
 distance = 1.0 - score  # score=1.0 → distance=0.0（完全一致）
 ```
 
-## 構成Aとの比較評価
+## 構成比較・チューニング
 
-| 項目 | S3 Vectors (構成A) | OpenSearch Serverless (構成B) |
-|---|---|---|
-| **検索方式** | ベクトル類似度のみ | ハイブリッド（ベクトル + BM25全文検索） |
-| **日本語対応** | Embeddingモデル依存 | icu_tokenizer による形態素解析 + Embedding |
-| **部分一致** | 不可 | BM25で対応（「ボストン」→「ボストンバッグ」） |
-| **コスト** | 従量課金のみ（$0〜） | 最低1 OCU（約$175/月） |
-| **セットアップ** | シンプル | Collection + ポリシー + Pipeline + インデックス設計 |
-| **レイテンシ** | 数百ms | 数百ms（同等） |
-| **フィルタ** | メタデータフィルタ | keyword/range/bool フィルタ |
-| **スケール** | 自動 | OCU自動スケール |
-| **精度（意味検索）** | ○ Embeddingの品質次第 | ○ 同じEmbedding使用 |
-| **精度（キーワード）** | △ 意味的に近くないとヒットしない | ◎ BM25で正確なキーワードマッチ |
-
-### 精度差が出るケース
-
-| クエリ例 | S3 Vectors | OpenSearch (Hybrid) |
-|---|---|---|
-| 「撥水 バッグ」 | Embeddingの意味理解に依存 | BM25で「撥水」テキスト一致 + ベクトル類似 |
-| 「6950円のバッグ」 | 価格情報はEmbeddingに弱い | text_contentに価格記載あればBM25でヒット |
-| 画像クエリ（類似商品） | ベクトル類似度で検索 | 同等（knnのみ使用） |
-| 「旅行 整理整頓」 | 意味的に近い商品をヒット | 意味検索 + テキスト一致の両方で補完 |
-
-## インフラ構成
-
-| リソース | 設定 |
-|---|---|
-| Collection | VECTORSEARCH, StandbyReplicas: DISABLED |
-| 暗号化 | AWS Owned Key |
-| ネットワーク | Public Access |
-| データアクセス | Lambda実行ロール3つ（Register, Search, Provision） |
-| Lambda Layer | opensearch-py + requests-aws4auth |
+→ [comparison-and-tuning.md](./comparison-and-tuning.md) を参照
 
 ## DynamoDB依存について
 

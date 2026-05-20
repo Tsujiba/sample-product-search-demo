@@ -340,7 +340,7 @@ def on_event(event, context):
         "settings": {
             "index": {"knn": True},
             "analysis": {
-                "analyzer": {"ja_analyzer": {"type": "custom", "tokenizer": "icu_tokenizer", "filter": ["icu_folding", "lowercase"]}}
+                "analyzer": {"ja_analyzer": {"type": "custom", "tokenizer": "kuromoji_tokenizer", "filter": ["kuromoji_baseform", "kuromoji_part_of_speech", "lowercase"]}}
             }
         },
         "mappings": {
