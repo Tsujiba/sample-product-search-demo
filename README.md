@@ -56,6 +56,11 @@ export CDK_DEFAULT_REGION=us-east-1
 export CDK_INPUT_USER_EMAILS=<your-email>
 
 npx cdk bootstrap
+
+# Lambda Layer をビルド＆S3にアップロード（初回のみ）
+# データバケット名: nova-mme-<account-id>-<region>
+../scripts/build-opensearch-layer.sh nova-mme-${CDK_DEFAULT_ACCOUNT}-${CDK_DEFAULT_REGION}
+
 npx cdk deploy --all
 ```
 
