@@ -1,7 +1,7 @@
 import React, { Component } from 'react';
 import {
   Button, Input, FileInput, SpaceBetween, Container, Header,
-  Cards, Badge, Spinner, Toggle, Box, Select
+  Cards, Badge, Spinner, Toggle, Box, Select, Grid, ColumnLayout
 } from '@cloudscape-design/components';
 import { FetchPost } from '../../resources/data-provider';
 
@@ -17,14 +17,17 @@ class ProductSearchPanel extends Component {
       backend: { value: 's3vectors', label: 'S3 Vectors' },
       searchTargets: ['image', 'text'],
       topK: 10,
+      // 精度比較モード
+      compareMode: false,
+      resultsA: [],
+      resultsB: [],
+      loadingCompare: false,
     };
   }
 
   handleSearch = async () => {
-    const { queryText, queryImageFile, backend, searchTargets, topK } = this.state;
+    const { queryText, queryImageFile, searchTargets, topK, compareMode } = this.state;
     if (!queryText && !queryImageFile) return;
-
-    this.setState({ loading: true, results: [] });
 
     let queryImageBase64 = '';
     let queryImageFormat = 'jpeg';
@@ -38,23 +41,37 @@ class ProductSearchPanel extends Component {
       queryImageFormat = queryImageFile.type.split('/')[1] || 'jpeg';
     }
 
-    try {
-      const response = await FetchPost('/products/search', {
-        query_text: queryText,
-        query_image_base64: queryImageBase64,
-        query_image_format: queryImageFormat,
-        backend: backend.value,
-        search_targets: searchTargets,
-        top_k: topK,
-        include_image_url: true,
-      }, 'ProductService');
+    const basePayload = {
+      query_text: queryText,
+      query_image_base64: queryImageBase64,
+      query_image_format: queryImageFormat,
+      search_targets: searchTargets,
+      top_k: topK,
+      include_image_url: true,
+    };
 
-      const body = response?.body || response;
-      this.setState({ results: body?.results || [] });
-    } catch (e) {
-      console.error('Search error:', e);
-    } finally {
-      this.setState({ loading: false });
+    if (compareMode) {
+      this.setState({ loadingCompare: true, resultsA: [], resultsB: [] });
+      try {
+        const [resA, resB] = await Promise.all([
+          FetchPost('/products/search', { ...basePayload, backend: 's3vectors' }, 'ProductService'),
+          FetchPost('/products/search', { ...basePayload, backend: 'opensearch' }, 'ProductService'),
+        ]);
+        this.setState({
+          resultsA: (resA?.body || resA)?.results || [],
+          resultsB: (resB?.body || resB)?.results || [],
+        });
+      } catch (e) { console.error('Compare error:', e); }
+      finally { this.setState({ loadingCompare: false }); }
+    } else {
+      this.setState({ loading: true, results: [] });
+      try {
+        const response = await FetchPost('/products/search', {
+          ...basePayload, backend: this.state.backend.value,
+        }, 'ProductService');
+        this.setState({ results: (response?.body || response)?.results || [] });
+      } catch (e) { console.error('Search error:', e); }
+      finally { this.setState({ loading: false }); }
     }
   };
 
@@ -67,8 +84,51 @@ class ProductSearchPanel extends Component {
     reader.readAsDataURL(file);
   };
 
+  renderResultCards(items, title) {
+    return (
+      <Cards
+        cardDefinition={{
+          header: (item) => (
+            <SpaceBetween direction="horizontal" size="xs">
+              <span>{item.product_name}</span>
+              <Badge color={item.match_type === 'image' ? 'blue' : 'green'}>{item.match_type}</Badge>
+            </SpaceBetween>
+          ),
+          sections: [
+            {
+              id: 'image',
+              content: (item) => item.image_url
+                ? <img src={item.image_url} alt={item.product_name} style={{ width: '100%', maxHeight: 160, objectFit: 'contain', borderRadius: 4 }} />
+                : <Box color="text-status-inactive">画像なし</Box>
+            },
+            {
+              id: 'info',
+              header: '商品情報',
+              content: (item) => (
+                <SpaceBetween size="xxs">
+                  <div><strong>コード:</strong> {item.product_code}</div>
+                  <div><strong>カテゴリ:</strong> {item.category}</div>
+                  {item.price > 0 && <div><strong>価格:</strong> ¥{item.price.toLocaleString()}</div>}
+                  <div><strong>類似度スコア:</strong> {(1 - item.distance).toFixed(3)}</div>
+                </SpaceBetween>
+              )
+            },
+            {
+              id: 'text',
+              header: 'テキスト情報',
+              content: (item) => <Box variant="small">{item.text_content}</Box>
+            }
+          ]
+        }}
+        items={items}
+        cardsPerRow={[{ cards: 1 }, { minWidth: 500, cards: 2 }]}
+        header={<Header counter={`(${items.length}件)`}>{title}</Header>}
+      />
+    );
+  }
+
   render() {
-    const { queryText, queryImagePreview, results, loading, backend } = this.state;
+    const { queryText, queryImagePreview, results, loading, backend, compareMode, resultsA, resultsB, loadingCompare } = this.state;
 
     return (
       <SpaceBetween size="l">
@@ -88,15 +148,20 @@ class ProductSearchPanel extends Component {
                 value={this.state.queryImageFile ? [this.state.queryImageFile] : []}
                 onChange={({ detail }) => this.handleImageSelect(detail.value)}
               >画像で検索</FileInput>
-              <Select
-                selectedOption={backend}
-                onChange={({ detail }) => this.setState({ backend: detail.selectedOption })}
-                options={[
-                  { value: 's3vectors', label: 'S3 Vectors' },
-                  { value: 'opensearch', label: 'OpenSearch (Phase 2)', disabled: true },
-                ]}
-              />
-              <Button variant="primary" onClick={this.handleSearch} loading={loading}>検索</Button>
+              {!compareMode && (
+                <Select
+                  selectedOption={backend}
+                  onChange={({ detail }) => this.setState({ backend: detail.selectedOption })}
+                  options={[
+                    { value: 's3vectors', label: 'S3 Vectors' },
+                    { value: 'opensearch', label: 'OpenSearch Serverless' },
+                  ]}
+                />
+              )}
+              <Toggle checked={compareMode} onChange={({ detail }) => this.setState({ compareMode: detail.checked })}>
+                精度比較
+              </Toggle>
+              <Button variant="primary" onClick={this.handleSearch} loading={loading || loadingCompare}>検索</Button>
             </div>
 
             {queryImagePreview && (
@@ -109,49 +174,17 @@ class ProductSearchPanel extends Component {
           </SpaceBetween>
         </Container>
 
-        {loading && <Spinner size="large" />}
+        {(loading || loadingCompare) && <Spinner size="large" />}
 
-        {results.length > 0 && (
-          <Cards
-            cardDefinition={{
-              header: (item) => (
-                <SpaceBetween direction="horizontal" size="xs">
-                  <span>{item.product_name}</span>
-                  <Badge color={item.match_type === 'image' ? 'blue' : 'green'}>
-                    {item.match_type}
-                  </Badge>
-                </SpaceBetween>
-              ),
-              sections: [
-                {
-                  id: 'image',
-                  content: (item) => item.image_url
-                    ? <img src={item.image_url} alt={item.product_name} style={{ width: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 4 }} />
-                    : <Box color="text-status-inactive">画像なし</Box>
-                },
-                {
-                  id: 'info',
-                  header: '商品情報',
-                  content: (item) => (
-                    <SpaceBetween size="xxs">
-                      <div><strong>コード:</strong> {item.product_code}</div>
-                      <div><strong>カテゴリ:</strong> {item.category}</div>
-                      {item.price > 0 && <div><strong>価格:</strong> ¥{item.price.toLocaleString()}</div>}
-                      <div><strong>類似度スコア:</strong> {(1 - item.distance).toFixed(3)}</div>
-                    </SpaceBetween>
-                  )
-                },
-                {
-                  id: 'text',
-                  header: 'テキスト情報',
-                  content: (item) => <Box variant="small">{item.text_content}</Box>
-                }
-              ]
-            }}
-            items={results}
-            cardsPerRow={[{ cards: 1 }, { minWidth: 400, cards: 2 }, { minWidth: 800, cards: 3 }]}
-            header={<Header counter={`(${results.length}件)`}>検索結果</Header>}
-          />
+        {/* 通常モード */}
+        {!compareMode && results.length > 0 && this.renderResultCards(results, '検索結果')}
+
+        {/* 精度比較モード */}
+        {compareMode && (resultsA.length > 0 || resultsB.length > 0) && (
+          <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
+            <div>{this.renderResultCards(resultsA, 'S3 Vectors')}</div>
+            <div>{this.renderResultCards(resultsB, 'OpenSearch (Hybrid)')}</div>
+          </Grid>
         )}
       </SpaceBetween>
     );

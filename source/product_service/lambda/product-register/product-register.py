@@ -1,7 +1,7 @@
 """
 product-register: 商品データ登録Lambda
 - S3上のCSV + テキストファイル + 画像ファイルから商品を登録
-- Nova Embeddings でベクトル化し S3 Vectors + DynamoDB に保存
+- Nova Embeddings でベクトル化し S3 Vectors + DynamoDB + OpenSearch に保存
 """
 import json
 import boto3
@@ -19,6 +19,8 @@ S3_VECTOR_INDEX_IMAGE = os.environ["S3_VECTOR_INDEX_IMAGE"]
 S3_VECTOR_INDEX_TEXT = os.environ["S3_VECTOR_INDEX_TEXT"]
 MODEL_ID = os.environ["MODEL_ID"]
 EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "1024"))
+AOSS_ENDPOINT = os.environ.get("AOSS_ENDPOINT", "")
+AOSS_INDEX_NAME = os.environ.get("AOSS_INDEX_NAME", "product-vectors")
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
@@ -26,6 +28,26 @@ bedrock = boto3.client("bedrock-runtime")
 s3vectors = boto3.client("s3vectors")
 
 product_table = dynamodb.Table(DYNAMO_PRODUCT_TABLE)
+
+# OpenSearch client (lazy init)
+_os_client = None
+
+def get_os_client():
+    global _os_client
+    if _os_client is None and AOSS_ENDPOINT:
+        from opensearchpy import OpenSearch, RequestsHttpConnection
+        from requests_aws4auth import AWS4Auth
+        credentials = boto3.Session().get_credentials().get_frozen_credentials()
+        auth = AWS4Auth(credentials.access_key, credentials.secret_key,
+                        os.environ.get("AWS_REGION", "us-east-1"), "aoss",
+                        session_token=credentials.token)
+        host = AOSS_ENDPOINT.replace("https://", "")
+        _os_client = OpenSearch(
+            hosts=[{"host": host, "port": 443}],
+            http_auth=auth, use_ssl=True, verify_certs=True,
+            connection_class=RequestsHttpConnection, timeout=30
+        )
+    return _os_client
 
 
 def lambda_handler(event, context):
@@ -95,6 +117,11 @@ def register_single(event):
     if text_embedding:
         put_vector(S3_VECTOR_INDEX_TEXT, product_id, text_embedding, metadata)
 
+    # OpenSearch登録
+    index_to_opensearch(product_id, product_code, event.get("product_name", ""),
+                        event.get("category", ""), text_content,
+                        image_embedding, text_embedding)
+
     return {"statusCode": 200, "body": {"product_id": product_id, "status": "registered"}}
 
 
@@ -151,6 +178,11 @@ def register_batch(s3_prefix, csv_key):
             put_vector(S3_VECTOR_INDEX_IMAGE, product_id, image_embedding, metadata)
         if text_embedding:
             put_vector(S3_VECTOR_INDEX_TEXT, product_id, text_embedding, metadata)
+
+        # OpenSearch登録
+        index_to_opensearch(product_id, product_code, row.get("product_name", ""),
+                            row.get("category", ""), text_content,
+                            image_embedding, text_embedding)
 
         results.append({"product_code": product_code, "product_id": product_id, "status": "ok"})
 
@@ -218,3 +250,28 @@ def put_vector(index_name, product_id, embedding, metadata):
             "metadata": metadata,
         }]
     )
+
+
+def index_to_opensearch(product_id, product_code, product_name, category, text_content, image_embedding, text_embedding):
+    """OpenSearch Serverlessに画像/テキストのembeddingをそれぞれ1ドキュメントとして登録"""
+    client = get_os_client()
+    if not client:
+        return
+
+    base_doc = {
+        "product_id": product_id,
+        "product_code": product_code,
+        "product_name": product_name,
+        "category": category,
+        "text_content": text_content[:10000],
+    }
+
+    try:
+        if image_embedding:
+            doc = {**base_doc, "embedding": image_embedding, "embedding_type": "image"}
+            client.index(index=AOSS_INDEX_NAME, body=doc)
+        if text_embedding:
+            doc = {**base_doc, "embedding": text_embedding, "embedding_type": "text"}
+            client.index(index=AOSS_INDEX_NAME, body=doc)
+    except Exception as e:
+        print(f"OpenSearch index error: {e}")

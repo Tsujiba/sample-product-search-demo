@@ -13,3 +13,8 @@ MODEL_ID_BEDROCK_MME = "amazon.nova-2-multimodal-embeddings-v1:0"
 
 S3_PRE_SIGNED_URL_EXPIRY_S = "3600"
 LAMBDA_LAYER_SOURCE_S3_KEY_BOTO3 = "layer/boto3_layer.zip"
+LAMBDA_LAYER_SOURCE_S3_KEY_OPENSEARCH = "layer/opensearch_layer.zip"
+
+# OpenSearch Serverless (Phase 2)
+AOSS_COLLECTION_NAME = "nova-mme-product-vectors"
+AOSS_INDEX_NAME = "product-vectors"

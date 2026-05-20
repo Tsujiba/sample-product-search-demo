@@ -1,7 +1,6 @@
 """
 product-search: 商品検索Lambda
-- テキスト/画像クエリをEmbedding化 → S3 Vectors検索 → DynamoDB結合
-- 将来的にbackendパラメータでOpenSearch切替対応
+- テキスト/画像クエリをEmbedding化 → S3 Vectors or OpenSearch検索 → DynamoDB結合
 """
 import json
 import boto3
@@ -16,6 +15,8 @@ S3_VECTOR_INDEX_TEXT = os.environ["S3_VECTOR_INDEX_TEXT"]
 MODEL_ID = os.environ["MODEL_ID"]
 EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "1024"))
 S3_PRESIGNED_URL_EXPIRY_S = int(os.environ.get("S3_PRESIGNED_URL_EXPIRY_S", "3600"))
+AOSS_ENDPOINT = os.environ.get("AOSS_ENDPOINT", "")
+AOSS_INDEX_NAME = os.environ.get("AOSS_INDEX_NAME", "product-vectors")
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
@@ -23,6 +24,25 @@ bedrock = boto3.client("bedrock-runtime")
 s3vectors = boto3.client("s3vectors")
 
 product_table = dynamodb.Table(DYNAMO_PRODUCT_TABLE)
+
+_os_client = None
+
+def get_os_client():
+    global _os_client
+    if _os_client is None and AOSS_ENDPOINT:
+        from opensearchpy import OpenSearch, RequestsHttpConnection
+        from requests_aws4auth import AWS4Auth
+        credentials = boto3.Session().get_credentials().get_frozen_credentials()
+        auth = AWS4Auth(credentials.access_key, credentials.secret_key,
+                        os.environ.get("AWS_REGION", "us-east-1"), "aoss",
+                        session_token=credentials.token)
+        host = AOSS_ENDPOINT.replace("https://", "")
+        _os_client = OpenSearch(
+            hosts=[{"host": host, "port": 443}],
+            http_auth=auth, use_ssl=True, verify_certs=True,
+            connection_class=RequestsHttpConnection, timeout=30
+        )
+    return _os_client
 
 
 def lambda_handler(event, context):
@@ -60,10 +80,9 @@ def lambda_handler(event, context):
         return {"statusCode": 500, "body": {"error": "Failed to generate query embedding"}}
 
     # バックエンド別検索
-    if backend == "s3vectors":
-        results = search_s3vectors(query_embedding, search_targets, top_k)
+    if backend == "opensearch":
+        results = search_opensearch(query_embedding, search_targets, top_k, query_text)
     else:
-        # Phase 2: opensearch対応
         results = search_s3vectors(query_embedding, search_targets, top_k)
 
     # DynamoDBから商品詳細を取得 & presigned URL付与
@@ -99,6 +118,78 @@ def search_s3vectors(query_embedding, search_targets, top_k):
                 }
 
     # 距離でソート（小さい = 類似度高い）
+    sorted_results = sorted(all_results.values(), key=lambda x: x["distance"])
+    return sorted_results[:top_k]
+
+
+def search_opensearch(query_embedding, search_targets, top_k, query_text=""):
+    """OpenSearch Serverlessでハイブリッド検索（knn + BM25全文検索）"""
+    client = get_os_client()
+    if not client:
+        return search_s3vectors(query_embedding, search_targets, top_k)
+
+    # embedding_typeフィルタ
+    filter_clause = []
+    if search_targets and set(search_targets) != {"image", "text"}:
+        filter_clause = [{"terms": {"embedding_type": search_targets}}]
+
+    # ハイブリッド検索: knn + BM25全文検索
+    knn_query = {
+        "knn": {
+            "embedding": {
+                "vector": query_embedding,
+                "k": top_k,
+                **({"filter": {"bool": {"must": filter_clause}}} if filter_clause else {})
+            }
+        }
+    }
+
+    if query_text:
+        # ハイブリッド: ベクトル(60%) + 全文検索(40%)
+        query = {
+            "size": top_k,
+            "query": {
+                "hybrid": {
+                    "queries": [
+                        knn_query,
+                        {"bool": {"should": [
+                            {"match": {"text_content": {"query": query_text, "boost": 1.0}}},
+                            {"match": {"product_name": {"query": query_text, "boost": 2.0}}},
+                        ], **({"filter": filter_clause} if filter_clause else {})}}
+                    ]
+                }
+            },
+            "_source": ["product_id", "product_code", "product_name", "category", "embedding_type"]
+        }
+        params = {"search_pipeline": "hybrid-search-pipeline"}
+    else:
+        # 画像クエリの場合はknnのみ
+        query = {
+            "size": top_k,
+            "query": knn_query,
+            "_source": ["product_id", "product_code", "product_name", "category", "embedding_type"]
+        }
+        params = {}
+
+    response = client.search(index=AOSS_INDEX_NAME, body=query, params=params)
+
+    all_results = {}
+    for hit in response.get("hits", {}).get("hits", []):
+        src = hit["_source"]
+        product_id = src["product_id"]
+        score = hit.get("_score", 0)
+        # スコアを距離に変換（高スコア=類似 → 低距離=類似）
+        distance = 1.0 - score if score <= 1.0 else (1.0 / score - 1.0) if score > 0 else 1.0
+        match_type = src.get("embedding_type", "unknown")
+
+        if product_id not in all_results or distance < all_results[product_id]["distance"]:
+            all_results[product_id] = {
+                "product_id": product_id,
+                "distance": distance,
+                "match_type": match_type,
+                "metadata": {"product_code": src.get("product_code", ""), "product_name": src.get("product_name", "")},
+            }
+
     sorted_results = sorted(all_results.values(), key=lambda x: x["distance"])
     return sorted_results[:top_k]
 
