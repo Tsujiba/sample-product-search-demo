@@ -1,141 +1,242 @@
-# Demo of Amazon Nova Multimodal Embedding (MME)
+# Amazon Nova マルチモーダルエンベディング（MME）デモ + 商品画像検索拡張
 
-> This solution is available as a CDK package and can be deployed to your AWS account by running just a few simple scripts.
+> このソリューションは CDK パッケージとして提供されており、いくつかのスクリプトを実行するだけで AWS アカウントにデプロイできます。
 
-This application serves as a demo to showcase [**Amazon Nova’s multimodal embedding**](https://aws.amazon.com/blogs/aws/amazon-nova-multimodal-embeddings-now-available-in-amazon-bedrock/) capabilities in [**Amazon Bedrock**](https://aws.amazon.com/bedrock/), enabling unified search across text, images, video, and audio. It can be used as a quick start to explore Nova MME features, deliver demonstrations, or serve as a reference architecture for your own applications.
+このアプリケーションは、[**Amazon Bedrock**](https://aws.amazon.com/bedrock/) における [**Amazon Nova マルチモーダルエンベディング**](https://aws.amazon.com/blogs/aws/amazon-nova-multimodal-embeddings-now-available-in-amazon-bedrock/) の機能をデモンストレーションするものです。テキスト、画像、動画、音声を横断した統合検索を実現します。
 
-The application includes an interactive web interface where you can upload multimedia files, perform cross-modal searches, and experience how embeddings power intelligent content discovery across different modalities.
+さらに本プロジェクトでは、Nova MME を活用した **商品画像検索機能**（Product Service）を拡張実装しています。CSV + 画像ファイルによる商品一括登録、テキスト/画像によるマルチモーダル商品検索が可能です。
 
-## Table of Contents
+## 目次
 
-- [Demo Recording](#demo-recording)
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Deployment Steps](#deployment-steps)
-- [Deployment Validation](#deployment-validation)
-- [Running the Guidance](#running-the-guidance)
-- [Cleanup](#cleanup)
+- [デモ動画](#デモ動画)
+- [アーキテクチャ](#アーキテクチャ)
+- [商品画像検索拡張（Product Service）](#商品画像検索拡張product-service)
+- [前提条件](#前提条件)
+- [デプロイ手順](#デプロイ手順)
+- [デプロイの確認](#デプロイの確認)
+- [使い方](#使い方)
+- [クリーンアップ](#クリーンアップ)
 
-## Demo recording
+## デモ動画
 ![nova-mme-demo](./assets/nova-mme-demo.gif)
 
-## Architecture
+## アーキテクチャ
 
-Nova MME is built on a modern serverless architecture using AWS services for scalability, reliability, and performance. The system processes multimedia content through a pipeline that extracts embeddings and stores them in a vector database for efficient semantic search.
+Nova MME は、スケーラビリティ・信頼性・パフォーマンスを備えた AWS サーバーレスアーキテクチャ上に構築されています。
 
-![System Architecture](./assets/nova-mme-architecture.png)
+![システムアーキテクチャ](./assets/nova-mme-architecture.png)
 
-### Core Components
+### コアコンポーネント
 
-- **Frontend:** React-based web application providing an intuitive interface for uploading media and performing searches
-- **Amazo API Gateway:** RESTful API endpoints for secure communication between frontend and backend services
-- **AWS Lambda Functions:** Serverless compute layer handling media processing, embedding generation, and search operations
-- **Amazon DynamoDB:** Store the MME task metadata
-- **Amazon S3:** Scalable object storage for media files (videos, images, audio, documents)
-- **Amazon S3 Vectors:** Serverless vector storage for efficient similarity search across embeddings
-- **Amazon Bedrock:** Foundation model access providing the underlying AI capabilities for embedding generation and semantic understanding
+| コンポーネント | 技術 | 用途 |
+|---|---|---|
+| フロントエンド | React + Cloudscape Design | メディアアップロード・検索UI |
+| 認証 | Amazon Cognito (User Pool + Identity Pool) | ユーザー認証 |
+| API | Amazon API Gateway + AWS Lambda (Python) | REST API |
+| ベクトルストア | Amazon S3 Vectors | Embedding の保存・類似検索 |
+| メタデータ | Amazon DynamoDB | タスク管理・商品マスタ |
+| Embedding 生成 | Amazon Bedrock (Nova Multimodal Embeddings) | クロスモーダル Embedding 生成 |
+| ホスティング | Amazon CloudFront + S3 | 静的 Web サイト配信 |
+| IaC | AWS CDK (Python) | インフラデプロイ |
 
-### Multi-Modal Embedding Process
+### マルチモーダルエンベディング処理
 
-![Multi-Modal Embedding Process](./assets/mme-diagram.png)
+![マルチモーダルエンベディング処理](./assets/mme-diagram.png)
 
-The embedding process transforms different content types into a shared vector space, enabling cross-modal search capabilities where you can find videos using text queries, discover images through natural language, or locate audio clips based on semantic similarity.
+異なるコンテンツタイプを共有ベクトル空間に変換し、テキストで画像を検索したり、画像で類似商品を発見するクロスモーダル検索を実現します。
 
-## Prerequisites
+## 商品画像検索拡張（Product Service）
 
-- If you don't have the AWS account administrator access, ensure your [IAM](https://aws.amazon.com/iam/) role/user has permissions to create and manage the necessary resources and components for this solution.
-- In Amazon Bedrock, make sure you have access to the required models: 
-    - Nova multimodal embedding
+既存の Nova MME デモを「**商品画像検索ツール**」に特化させた拡張機能です。
+
+### 構成：S3 Vectors + DynamoDB
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  React Frontend (Cloudscape)                                     │
+│  - 商品登録画面（CSV + 画像アップロード）                         │
+│  - 検索画面（テキスト/画像クエリ）                                │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ API Gateway + Cognito Auth
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Lambda Functions (Python 3.13)                                   │
+│  product-register:  商品データ登録（Embedding生成 + 保存）        │
+│  product-search:    マルチモーダル検索                            │
+│  product-list:      商品一覧取得                                 │
+└───────────┬──────────────────┬──────────────────┬───────────────┘
+            │                  │                  │
+            ▼                  ▼                  ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ S3 Vectors       │  │ S3 Vectors       │  │ DynamoDB         │
+│ product-image    │  │ product-text     │  │ product-master   │
+│ -vectors         │  │ -vectors         │  │ (商品マスタ)     │
+│ (画像Embedding)  │  │ (テキスト       │  │                  │
+│                  │  │  Embedding)      │  │                  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+### 主な機能
+
+- **商品一括登録**: CSV ファイル + 画像ファイルで商品データを一括登録
+- **マルチモーダル検索**: テキストクエリ（例：「もこもこの靴下」）や画像クエリで商品を検索
+- **クロスモーダル検索**: テキストで画像を、画像でテキストを横断検索（同一ベクトル空間）
+
+### 使用モデル
+
+| モデル | 用途 |
+|---|---|
+| `amazon.nova-2-multimodal-embeddings-v1:0` | テキスト/画像の Embedding 生成（1024次元） |
+| Nova Lite 1.0 | メディア処理補助 |
+
+### API エンドポイント
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| POST | `/v1/products/register` | 商品登録（CSV + 画像） |
+| POST | `/v1/products/search` | 商品検索（テキスト/画像クエリ） |
+| POST | `/v1/products/list` | 商品一覧取得 |
+
+### データモデル
+
+**DynamoDB: product-master テーブル**
+
+| 属性 | 型 | 説明 |
+|---|---|---|
+| product_id (PK) | String | 商品ID |
+| product_code | String | 商品コード（GSI） |
+| product_name | String | 商品名 |
+| category | String | カテゴリ（GSI） |
+| price | Number | 価格 |
+| image_s3_key | String | S3 上の画像パス |
+| full_text | String | 全テキスト情報 |
+
+## 前提条件
+
+- AWS アカウントの管理者アクセス、または必要なリソースを作成・管理する [IAM](https://aws.amazon.com/iam/) 権限
+- Amazon Bedrock で以下のモデルへのアクセスを有効化：
+    - Nova Multimodal Embeddings
     - Nova Lite 1.0
 
-### Install environment dependencies and set up authentication
+### 環境依存関係のインストールと認証設定
 
 <details><summary>
-:bulb: Skip if using CloudShell or AWS services that support bash commands from the same account (e.g., Cloud9). Required for self-managed environments like local desktops.
+:bulb: CloudShell を使用する場合はスキップ可能。ローカル環境の場合に必要です。
 </summary>
 
-- [ ] Install Node.js
-https://nodejs.org/en/download/
-
-- [ ] Install Python 3.9+
-https://www.python.org/downloads/
-
-- [ ] Install Git
-https://github.com/git-guides/install-git
-
-- [ ] Install Pip
+- [ ] Node.js のインストール: https://nodejs.org/en/download/
+- [ ] Python 3.9+ のインストール: https://www.python.org/downloads/
+- [ ] Git のインストール: https://github.com/git-guides/install-git
+- [ ] Pip のインストール
 ```sh
 python -m ensurepip --upgrade
 ```
-
-- [ ] Install Python Virtual Environment
+- [ ] Python 仮想環境のインストール
 ```sh
 pip install virtualenv
 ```
-
-
-- [ ] Setup the AWS CLI authentication
+- [ ] AWS CLI 認証の設定
 ```sh
-aws configure                                                                     
- ```                      
+aws configure
+```
 </details>
 
-![Open CloudShell](./assets/cloudshell.png)
+![CloudShell を開く](./assets/cloudshell.png)
 
-If your CloudShell instance has older dependency libraries like npm or pip, it may cause deployment errors. To resolve this, click 'Actions' and choose 'Delete AWS CloudShell Home Directory' to start a fresh instance.
-
-### Supported Regions
-The solution requires AWS AI and Generative AI services, including Amazon Bedrock, Amazon Rekognition and Amazon Transcribe, which are available in certain regions. Please choose one of the below AWS regions to deploy the CDK package.
+### 対応リージョン
 
 |||||
 ---------- | ---------- | ---------- | ---------- |
-US | us-east-1 (N. Virginia) | ||
+US | us-east-1 (バージニア北部) | ||
 
-## Deployment Steps
-1. Clone the source code from GitHub repo 
+## デプロイ手順
 
-```
+1. ソースコードをクローン
+
+```bash
 git clone https://github.com/aws-samples/sample-demo-of-nova-mme.git
 cd sample-demo-of-nova-mme
 ```
 
-2. Set up environment varaibles 
+2. 環境変数を設定
 
-Set environment variables as input parameters for the CDK deployment package:
+```bash
+# Web ポータルのログイン用メールアドレス（カンマ区切りで複数指定可）
+export CDK_INPUT_USER_EMAILS=<メールアドレス>
 
-CDK_INPUT_USER_EMAILS: Email address(es) for login to the web portal. They will receive temporary passwords.
-```
-export CDK_INPUT_USER_EMAILS=<EMAILS_SPLIT_BY_COMMA>
-```
-
-Update the values with your target AWS account ID and the region where you intend to deploy the demo application.
-```
-export CDK_DEFAULT_ACCOUNT=<YOUR_ACCOUNT_ID>
-export CDK_DEFAULT_REGION=<YOUR_TARGET_REGION> (e.x, us-east-1)
+# デプロイ先の AWS アカウント ID とリージョン
+export CDK_DEFAULT_ACCOUNT=<アカウントID>
+export CDK_DEFAULT_REGION=<リージョン>  # 例: us-east-1
 ```
 
-3. Run **deploy-cloudshell.sh** in CloudShell to deploy the application to your AWS account with the parameters defined in step 2.
-```
+3. デプロイスクリプトを実行
+
+```bash
 cd deployment
 bash ./deploy-cloudshell.sh
 ```
 
-## Deployment Validation
+## デプロイの確認
 
-Once the deployment completes, you can find the website URL in the bash console. You can also find it in the CloudFormation console by checking the output in stack **NovaMmeRootStack**.
+デプロイ完了後、Web サイトの URL がコンソールに表示されます。CloudFormation コンソールの **NovaMmeRootStack** スタックの出力からも確認できます。
 
-## Running the Guidance
-- If you provided one or more email addresses through the environment variable `CDK_INPUT_USER_EMAILS` during setup, an email containing a username and temporary password will be sent to those addresses as part of the deployment process. Users can use these credentials to sign in to the web portal.
+出力される主な情報：
+- **Website URL**: フロントエンドの URL
+- **API Gateway Base URL: Nova MME Service**: Nova MME サービスの API エンドポイント
+- **API Gateway Base URL: Product Service**: 商品検索サービスの API エンドポイント
 
-- If `CDK_INPUT_USER_EMAILS` was set, you will need to manually create a user by navigating to the Cognito console and adding a user to the **nova-mme-user-pool**.
+## 使い方
 
-## Cleanup
+- デプロイ時に `CDK_INPUT_USER_EMAILS` で指定したメールアドレスに、ユーザー名と一時パスワードが送信されます。これを使って Web ポータルにサインインしてください。
+- メールアドレスを指定しなかった場合は、Cognito コンソールから **nova-mme-user-pool** にユーザーを手動で作成してください。
 
-When you’re finished experimenting with this solution, clean up your resources by running the command from CloudShell:
+## プロジェクト構成
 
 ```
+sample-product-search-demo/
+├── source/
+│   ├── product_service/              # 商品検索サービス（拡張）
+│   │   └── lambda/
+│   │       ├── product-register/     # 商品登録 Lambda
+│   │       ├── product-search/       # 商品検索 Lambda
+│   │       └── product-list/         # 商品一覧 Lambda
+│   ├── nova_service/                 # Nova MME サービス（既存）
+│   │   └── lambda/
+│   └── frontend/web/                 # React フロントエンド
+│
+├── deployment/
+│   ├── app.py                        # CDK アプリケーション（ルートスタック）
+│   ├── product_service/              # 商品検索 CDK スタック（拡張）
+│   ├── nova_service/                 # Nova MME CDK スタック
+│   ├── pre_stack/                    # 事前準備スタック（S3, Cognito, Lambda Layer）
+│   ├── post_stack/                   # 事後処理スタック（ユーザー作成）
+│   └── frontend/                     # フロントエンド CDK スタック
+│
+├── docs/
+│   └── implementation-plan.md        # 実装プラン
+└── assets/                           # ドキュメント用画像
+```
+
+## コスト見積もり（5万件の商品データ）
+
+| サービス | 月額見積もり |
+|---|---|
+| S3 Vectors（2インデックス × 5万ベクトル） | ~$5-10 |
+| DynamoDB（5万レコード、オンデマンド） | ~$5-10 |
+| Lambda（検索 + 登録） | ~$1-5 |
+| Bedrock Nova Embeddings（初期登録 + 検索） | ~$10-20 |
+| **合計** | **~$20-45/月** |
+
+## クリーンアップ
+
+実験が終わったら、CloudShell から以下のコマンドでリソースを削除してください：
+
+```bash
 cdk destroy
 ```
 
-These commands deletes resources deploying through the solution. 
-You can also go to the CloudFormation console, select the `NovaMmeRootStack` stack, and click the Delete button to remove all the resources.
+CloudFormation コンソールから `NovaMmeRootStack` スタックを選択して削除することもできます。
+
+## ライセンス
+
+このプロジェクトは MIT-0 ライセンスの下で公開されています。詳細は [LICENSE](LICENSE) ファイルを参照してください。
