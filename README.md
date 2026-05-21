@@ -95,7 +95,7 @@ scripts/
 
 ### バッチ登録
 
-S3 に以下の構造でアップロードし、API を呼び出し：
+S3 に以下の構造でアップロード後、スクリプトで登録：
 
 ```
 s3://<data-bucket>/upload/batch001/
@@ -104,11 +104,25 @@ s3://<data-bucket>/upload/batch001/
   images/P00001.jpeg    # 商品画像
 ```
 
+```bash
+aws s3 sync ./sample_data s3://<data-bucket>/upload/batch001/
+./scripts/batch-register.sh upload/batch001/
+```
+
 ## スクリプト
 
 ```bash
+# 商品バッチ登録
+./scripts/batch-register.sh upload/batch001/
+
 # 全商品データ削除（S3 Vectors + DynamoDB + OpenSearch）
 ./scripts/clear-all-products.sh
+
+# OpenSearch インデックス再作成（analyzer変更時等）
+./scripts/recreate-opensearch-index.sh
+
+# opensearch-py Lambda Layer ビルド＆アップロード（初回のみ）
+./scripts/build-opensearch-layer.sh nova-mme-<account-id>-<region>
 ```
 
 ## クリーンアップ
